@@ -6,6 +6,7 @@
 # Altered by Christian Westergard, Carus Ab Ltd
 # Locale issue fixed by Mattias Bergsten <mattias@westbahr.com>
 # Performance data output added by Mattias Bergsten <mattias@westbahr.com>
+#
 #################
 # Modified Log #
 # Deepak Kosaraju : 08-16-2014
@@ -20,6 +21,8 @@
 # feature: add the ability to decode url encoded queries
 # L J Laubenheimer https://github.com/ljl-geek: 2015-10-23
 # feature: add the ability to make it identify the SID in the output
+# L J Laubenheimer https://github.com/ljl-geek: 2015-10-27
+# feature: added the ability to exclude UNDO% from tablespace check for both excluded and all
 #################
 #
 # For direct contact with any of the op5 developers send a mail to
@@ -38,6 +41,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
 #
 
 package CheckOracle;
@@ -84,7 +88,7 @@ sub check_prog_avail($);
 sub format_multi;
 sub my_die($);
 sub get_auth();
-our ($opt_c, $opt_t, $opt_e, $opt_l, $opt_d, $opt_u, $opt_p, $opt_w, $opt_h, $opt_V, $opt_o, $opt_a, $opt_q, $opt_v, $opt_s, $opt_r, $opt_T, $opt_f, $opt_H, $opt_R, $opt_D, $opt_I, $opt_sqlfile);
+our ($opt_c, $opt_t, $opt_e, $opt_l, $opt_d, $opt_u, $opt_p, $opt_w, $opt_h, $opt_V, $opt_o, $opt_a, $opt_q, $opt_v, $opt_s, $opt_r, $opt_T, $opt_f, $opt_H, $opt_R, $opt_D, $opt_I, $opt_N, $opt_sqlfile);
 my ($result, $message, $age, $size, $st, $connect_string, $sid);
 my ($dbmcli_arg);
 
@@ -133,6 +137,7 @@ $res=GetOptions(
 "R=i" => \$opt_R, "port=i" => \$opt_R,
 "D"   => \$opt_D, "detail" => \$opt_D,
 "I"   => \$opt_I, "identify" => \$opt_I,
+"N"   => \$opt_N, "not_undo" => \$opt_N,
 "k=s" => \$opt_k, "kom=s" => \$opt_k);
 
 if ( ! $res ) {
@@ -632,7 +637,14 @@ sub check_tablespace(){
 		{
 			$sql_threshold .= "((a.BYTES-b.BYTES)/a.BYTES*100) >= $threshold_max";
 		}
-		$sql_cmd = "select a.TABLESPACE_NAME from ( select TABLESPACE_NAME, sum(BYTES) BYTES from dba_data_files where TABLESPACE_NAME not in ('$opt_e') and AUTOEXTENSIBLE='NO' group by TABLESPACE_NAME ) a, ( select TABLESPACE_NAME, sum(BYTES) BYTES from dba_free_space group by TABLESPACE_NAME ) b where a.TABLESPACE_NAME=b.TABLESPACE_NAME and ($sql_threshold) order by ((a.BYTES-b.BYTES)/a.BYTES) desc;";
+
+                ## here is the "exclude UNDO*" option
+                my $no_undo="";
+                if($opt_N) {
+                        $no_undo="and TABLESPACE_NAME not like 'UNDO%'";
+                }
+
+		$sql_cmd = "select a.TABLESPACE_NAME from ( select TABLESPACE_NAME, sum(BYTES) BYTES from dba_data_files where TABLESPACE_NAME not in ('$opt_e') $no_undo and AUTOEXTENSIBLE='NO' group by TABLESPACE_NAME ) a, ( select TABLESPACE_NAME, sum(BYTES) BYTES from dba_free_space group by TABLESPACE_NAME ) b where a.TABLESPACE_NAME=b.TABLESPACE_NAME and ($sql_threshold) order by ((a.BYTES-b.BYTES)/a.BYTES) desc;";
 		@res = exec_sql_cmd($sql_cmd);
 		$num=@res;
 		if(@res[0] eq ''){
@@ -679,7 +691,14 @@ sub check_tablespace(){
 		{
 			$sql_threshold .= "((a.BYTES-b.BYTES)/a.BYTES*100) >= $threshold_max";
 		}
-		$sql_cmd = "select a.TABLESPACE_NAME from ( select TABLESPACE_NAME, sum(BYTES) BYTES from dba_data_files group by TABLESPACE_NAME ) a, ( select TABLESPACE_NAME, sum(BYTES) BYTES from dba_free_space group by TABLESPACE_NAME ) b where a.TABLESPACE_NAME=b.TABLESPACE_NAME and ($sql_threshold) order by ((a.BYTES-b.BYTES)/a.BYTES) desc;";
+
+                ## here is the "exclude UNDO*" option
+                my $no_undo="";
+                if($opt_N) {
+                        $no_undo="where TABLESPACE_NAME not like 'UNDO%'";
+                }
+
+		$sql_cmd = "select a.TABLESPACE_NAME from ( select TABLESPACE_NAME, sum(BYTES) BYTES from dba_data_files $no_undo group by TABLESPACE_NAME ) a, ( select TABLESPACE_NAME, sum(BYTES) BYTES from dba_free_space group by TABLESPACE_NAME ) b where a.TABLESPACE_NAME=b.TABLESPACE_NAME and ($sql_threshold) order by ((a.BYTES-b.BYTES)/a.BYTES) desc;";
 		@res = exec_sql_cmd($sql_cmd);
 		$num=@res;
 		if(@res[0] eq ''){
@@ -849,11 +868,13 @@ sub print_usage () {
 	print " $PROGNAME -o TABLESPACE -l <SID> -u <user> -p <passwd> [-a <tablespace>]\n";
 	print "           [-w <warn>] [-c <crit>]\n";
 	print "           [-e <tablespace>]\n";
+	print "           [-N]\n";
 	print "    Check tablespace usage. If -a <tablespace> a particular tablespace is\n";
 	print "    checked. If -e then all tablespaces are checked except the specified one.\n";
 	print "    Multiple tablespaces can be used with -e. Separate them with , (comma).\n";
 	print "    If no <tablespace> is supplied all tablespaces are checked\n";
 	print "    and a list of all that exceed warning or critical threshold are presented.\n";
+	print "    With the -N option, with or without -e (but not with -a), UNDO% is excluded. \n";
 	print "    Note: If a critical threshold is present, the warning threshold is ignored\n";
 	print " $PROGNAME -o DATAFILE -l <SID> -u <user> -p <password> -a <tablespace_name>\n";
 	print "           [-w <warn>] [-c <crit>]\n";
